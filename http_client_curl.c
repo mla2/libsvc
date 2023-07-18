@@ -35,6 +35,8 @@
 #include <assert.h>
 #include <ctype.h>
 
+#include <netinet/ip.h>
+
 #include <curl/curl.h>
 
 #include "misc.h"
@@ -145,6 +147,22 @@ wrapper_write(const void *ptr, size_t size, size_t nmemb, outfile_wrapper_t *ow)
 }
 
 
+static int
+sockopt_tos_fn(void *clientp, curl_socket_t curlfd,
+                     curlsocktype purpose)
+{
+  if (purpose != CURLSOCKTYPE_IPCXN)
+    return CURL_SOCKOPT_OK;
+
+  int *iptos = (int *)clientp;
+
+  if(setsockopt(curlfd, IPPROTO_IP, IP_TOS, iptos, sizeof(*iptos)) < 0) {
+    return CURL_SOCKOPT_ERROR;
+  }
+  return CURL_SOCKOPT_OK;
+}
+
+
 int
 http_client_request(http_client_response_t *hcr, const char *url, ...)
 {
@@ -169,6 +187,7 @@ http_client_request(http_client_response_t *hcr, const char *url, ...)
   va_start(apx, url);
 
   outfile_wrapper_t ow = {};
+  int sock_tos = 0;
   CURL *curl = get_handle();
   int auth_retry_code = 0;
   memset(hcr, 0, sizeof(http_client_response_t));
@@ -339,6 +358,15 @@ http_client_request(http_client_response_t *hcr, const char *url, ...)
       }
       break;
     }
+
+    case HCR_TAG_SET_TOS:
+      sock_tos = va_arg(ap, int);
+      if(sock_tos) {
+        curl_easy_setopt(curl, CURLOPT_SOCKOPTFUNCTION, sockopt_tos_fn);
+        curl_easy_setopt(curl, CURLOPT_SOCKOPTDATA, &sock_tos);
+      }
+      break;
+
 
 #if CURL_AT_LEAST_VERSION(7,56,0)
     case HCR_TAG_MULTIPARTFILE: {
